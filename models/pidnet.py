@@ -6,13 +6,54 @@ import torch.nn as nn
 import torch.nn.functional as F
 import time
 from .model_utils import BasicBlock, Bottleneck, segmenthead, DAPPM, PAPPM, PagFM, Bag, Light_Bag
+from .swiftformer import SwiftFormerLocalRepresentation, EfficientAdditiveAttnetion, Mlp
 import logging
 
 BatchNorm2d = nn.BatchNorm2d
 bn_mom = 0.1
 algc = False
 
+class SwiftFormerBlock(nn.Module):
+    expansion = 1
 
+    def __init__(self, inplanes, planes, stride=1, downsample=None, no_relu=False):
+        super().__init__()
+        self.downsample = downsample
+        self.no_relu = no_relu
+
+        self.local_rep = SwiftFormerLocalRepresentation(dim=planes)
+        self.attn = EfficientAdditiveAttnetion(planes, planes)
+        self.mlp = Mlp(planes, planes*4)
+
+        self.layer_scale_1 = nn.Parameter(1e-5 * torch.ones(planes))
+        self.layer_scale_2 = nn.Parameter(1e-5 * torch.ones(planes))
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        residual = x
+
+        if self.downsample is not None:
+            x = self.downsample(x)
+            residual = x
+
+        # local
+        x = self.local_rep(x)
+
+        # attention
+        B,C,H,W = x.shape
+        attn = self.attn(x.flatten(2).transpose(1,2))
+        attn = attn.transpose(1,2).view(B,C,H,W)
+
+        x = x + self.layer_scale_1.view(1,-1,1,1) * attn
+
+        # mlp
+        x = x + self.layer_scale_2.view(1,-1,1,1) * self.mlp(x)
+
+        if not self.no_relu:
+            x = self.relu(x)
+
+        return x
 
 class PIDNet(nn.Module):
 
