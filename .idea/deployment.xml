@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" serverName="root@117.50.197.249:23 password" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="root@117.50.197.249:23 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/tmp/pycharm_project_942" local="$PROJECT_DIR$" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath local="true" path="$PROJECT_DIR$/data/cityscapes" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
+      <paths name="root@117.50.48.6:23 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@9ba2194f62d44caa9c492e89d3ad28ca.region2.waas.aigate.cc:44581 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+  </component>
+</project>

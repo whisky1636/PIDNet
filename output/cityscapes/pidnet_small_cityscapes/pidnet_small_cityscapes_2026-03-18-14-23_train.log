@@ -1,0 +1,64 @@
+2026-03-18 14:23:15,717 Namespace(cfg='configs/cityscapes/pidnet_small_cityscapes.yaml', seed=304, opts=['GPUS', '(0,)', 'TRAIN.BATCH_SIZE_PER_GPU', '2'])
+2026-03-18 14:23:15,717 AUTO_RESUME: False
+CUDNN:
+  BENCHMARK: True
+  DETERMINISTIC: False
+  ENABLED: True
+DATASET:
+  DATASET: cityscapes
+  EXTRA_TRAIN_SET: 
+  NUM_CLASSES: 19
+  ROOT: data/
+  TEST_SET: list/cityscapes/val.lst
+  TRAIN_SET: list/cityscapes/train.lst
+GPUS: (0,)
+LOG_DIR: log
+LOSS:
+  BALANCE_WEIGHTS: [0.4, 1.0]
+  CLASS_BALANCE: False
+  OHEMKEEP: 131072
+  OHEMTHRES: 0.9
+  SB_WEIGHTS: 1.0
+  USE_OHEM: True
+MODEL:
+  ALIGN_CORNERS: True
+  NAME: pidnet_small
+  NUM_OUTPUTS: 2
+  PRETRAINED: pretrained_models/imagenet/PIDNet_S_ImageNet.pth.tar
+OUTPUT_DIR: output
+PIN_MEMORY: True
+PRINT_FREQ: 10
+TEST:
+  BASE_SIZE: 2048
+  BATCH_SIZE_PER_GPU: 6
+  FLIP_TEST: False
+  IMAGE_SIZE: [2048, 1024]
+  MODEL_FILE: 
+  MULTI_SCALE: False
+  OUTPUT_INDEX: 1
+TRAIN:
+  BASE_SIZE: 2048
+  BATCH_SIZE_PER_GPU: 2
+  BEGIN_EPOCH: 0
+  END_EPOCH: 484
+  EXTRA_EPOCH: 0
+  EXTRA_LR: 0.001
+  FLIP: True
+  IGNORE_LABEL: 255
+  IMAGE_SIZE: [1024, 1024]
+  LR: 0.01
+  MOMENTUM: 0.9
+  MULTI_SCALE: True
+  NESTEROV: False
+  OPTIMIZER: sgd
+  RESUME: False
+  SCALE_FACTOR: 16
+  SHUFFLE: True
+  WD: 0.0005
+WORKERS: 6
+2026-03-18 14:23:15,892 Attention!!!
+2026-03-18 14:23:15,893 Loaded 302 parameters!
+2026-03-18 14:23:15,893 Over!!!
+2026-03-18 14:23:36,273 Epoch: [0/484] Iter:[0/1487], Time: 18.57, lr: [0.01], Loss: 2.649393, Acc:0.003627, Semantic loss: 0.000000, BCE loss: 2.649393, SB loss: 0.000000
+2026-03-18 14:23:39,274 Epoch: [0/484] Iter:[10/1487], Time: 1.95, lr: [0.009999874949198113], Loss: 2.310432, Acc:0.011487, Semantic loss: 0.000000, BCE loss: 2.310432, SB loss: -0.000000
+2026-03-18 14:23:42,226 Epoch: [0/484] Iter:[20/1487], Time: 1.16, lr: [0.009999749898222469], Loss: 1.854961, Acc:0.010368, Semantic loss: 0.000000, BCE loss: 1.854961, SB loss: -0.000000

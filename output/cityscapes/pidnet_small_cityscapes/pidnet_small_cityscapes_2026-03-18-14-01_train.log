@@ -1,0 +1,66 @@
+2026-03-18 14:01:03,591 Namespace(cfg='configs/cityscapes/pidnet_small_cityscapes.yaml', seed=304, opts=['GPUS', '(0,)', 'TRAIN.BATCH_SIZE_PER_GPU', '2'])
+2026-03-18 14:01:03,591 AUTO_RESUME: False
+CUDNN:
+  BENCHMARK: True
+  DETERMINISTIC: False
+  ENABLED: True
+DATASET:
+  DATASET: cityscapes
+  EXTRA_TRAIN_SET: 
+  NUM_CLASSES: 19
+  ROOT: data/
+  TEST_SET: list/cityscapes/val.lst
+  TRAIN_SET: list/cityscapes/train.lst
+GPUS: (0,)
+LOG_DIR: log
+LOSS:
+  BALANCE_WEIGHTS: [0.4, 1.0]
+  CLASS_BALANCE: False
+  OHEMKEEP: 131072
+  OHEMTHRES: 0.9
+  SB_WEIGHTS: 1.0
+  USE_OHEM: True
+MODEL:
+  ALIGN_CORNERS: True
+  NAME: pidnet_small
+  NUM_OUTPUTS: 2
+  PRETRAINED: pretrained_models/imagenet/PIDNet_S_ImageNet.pth.tar
+OUTPUT_DIR: output
+PIN_MEMORY: True
+PRINT_FREQ: 10
+TEST:
+  BASE_SIZE: 2048
+  BATCH_SIZE_PER_GPU: 6
+  FLIP_TEST: False
+  IMAGE_SIZE: [2048, 1024]
+  MODEL_FILE: 
+  MULTI_SCALE: False
+  OUTPUT_INDEX: 1
+TRAIN:
+  BASE_SIZE: 2048
+  BATCH_SIZE_PER_GPU: 2
+  BEGIN_EPOCH: 0
+  END_EPOCH: 484
+  EXTRA_EPOCH: 0
+  EXTRA_LR: 0.001
+  FLIP: True
+  IGNORE_LABEL: 255
+  IMAGE_SIZE: [1024, 1024]
+  LR: 0.01
+  MOMENTUM: 0.9
+  MULTI_SCALE: True
+  NESTEROV: False
+  OPTIMIZER: sgd
+  RESUME: False
+  SCALE_FACTOR: 16
+  SHUFFLE: True
+  WD: 0.0005
+WORKERS: 6
+2026-03-18 14:01:03,792 Attention!!!
+2026-03-18 14:01:03,792 Loaded 302 parameters!
+2026-03-18 14:01:03,793 Over!!!
+2026-03-18 14:01:24,743 Epoch: [0/484] Iter:[0/1487], Time: 19.09, lr: [0.01], Loss: 2.649367, Acc:0.003631, Semantic loss: 0.000000, BCE loss: 2.649366, SB loss: 0.000000
+2026-03-18 14:01:27,755 Epoch: [0/484] Iter:[10/1487], Time: 2.00, lr: [0.009999874949198113], Loss: 2.289304, Acc:0.011544, Semantic loss: 0.000000, BCE loss: 2.289304, SB loss: 0.000000
+2026-03-18 14:01:30,697 Epoch: [0/484] Iter:[20/1487], Time: 1.19, lr: [0.009999749898222469], Loss: 1.851769, Acc:0.013543, Semantic loss: 0.000000, BCE loss: 1.851769, SB loss: 0.000000
+2026-03-18 14:01:33,705 Epoch: [0/484] Iter:[30/1487], Time: 0.90, lr: [0.009999624847073067], Loss: 1.633127, Acc:0.013968, Semantic loss: 0.000000, BCE loss: 1.633127, SB loss: 0.000000
+2026-03-18 14:01:36,863 Epoch: [0/484] Iter:[40/1487], Time: 0.76, lr: [0.009999499795749907], Loss: 1.510119, Acc:0.012597, Semantic loss: 0.000000, BCE loss: 1.510119, SB loss: -0.000000
