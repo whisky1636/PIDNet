@@ -310,29 +310,128 @@ class PagFM(nn.Module):
         x = (1-sim_map)*x + sim_map*y
         
         return x
-    
+
+
+# ==========================================
+# 1. 坐标注意力模块 (Coordinate Attention)
+# ==========================================
+class CoordAtt(nn.Module):
+    def __init__(self, inp, reduction=32, BatchNorm=nn.BatchNorm2d):
+        super(CoordAtt, self).__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+
+        # 降维以保证计算效率，最少为 8 个通道
+        mip = max(8, inp // reduction)
+
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = BatchNorm(mip, momentum=bn_mom)
+        self.act = nn.ReLU(inplace=True)
+
+        self.conv_h = nn.Conv2d(mip, inp, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv_w = nn.Conv2d(mip, inp, kernel_size=1, stride=1, padding=0, bias=False)
+
+    def forward(self, x):
+        identity = x
+        n, c, h, w = x.size()
+
+        # (1) 坐标信息嵌入 (Coordinate Information Embedding)
+        x_h = self.pool_h(x)  # 输出形状: (n, c, h, 1)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # 转置输出形状: (n, c, w, 1)
+
+        # (2) 坐标注意力生成 (Coordinate Attention Generation)
+        y = torch.cat([x_h, x_w], dim=2)  # 拼接: (n, c, h+w, 1)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        f = self.act(y)
+
+        # 重新分离 h 和 w
+        f_h, f_w = torch.split(f, [h, w], dim=2)
+        f_w = f_w.permute(0, 1, 3, 2)  # 转置回: (n, mip, 1, w)
+
+        # Sigmoid 激活生成注意力权重
+        g_h = torch.sigmoid(self.conv_h(f_h))  # g^h: (n, c, h, 1)
+        g_w = torch.sigmoid(self.conv_w(f_w))  # g^w: (n, c, 1, w)
+
+        # (3) 加权输出 (Weighted Output)
+        out = identity * g_h * g_w  # D' = D * g^h * g^w
+
+        return out
+
+
+# ==========================================
+# 2. 增强版的 Light_Bag 模块
+# ==========================================
 class Light_Bag(nn.Module):
     def __init__(self, in_channels, out_channels, BatchNorm=nn.BatchNorm2d):
         super(Light_Bag, self).__init__()
+
+        # 引入坐标注意力机制对 D 分支进行增强
+        self.ca = CoordAtt(in_channels, reduction=32, BatchNorm=BatchNorm)
+
         self.conv_p = nn.Sequential(
-                                nn.Conv2d(in_channels, out_channels, 
-                                          kernel_size=1, bias=False),
-                                BatchNorm(out_channels)
-                                )
+            nn.Conv2d(in_channels, out_channels,
+                      kernel_size=1, bias=False),
+            BatchNorm(out_channels, momentum=bn_mom)
+        )
         self.conv_i = nn.Sequential(
-                                nn.Conv2d(in_channels, out_channels, 
-                                          kernel_size=1, bias=False),
-                                BatchNorm(out_channels)
-                                )
-        
+            nn.Conv2d(in_channels, out_channels,
+                      kernel_size=1, bias=False),
+            BatchNorm(out_channels, momentum=bn_mom)
+        )
+
     def forward(self, p, i, d):
-        edge_att = torch.sigmoid(d)
-        
-        p_add = self.conv_p((1-edge_att)*i + p)
-        i_add = self.conv_i(i + edge_att*p)
-        
+        # 1. 使用坐标注意力对边界信息 D 进行增强
+        d_enhanced = self.ca(d)
+
+        # 2. 获取最终的 Edge Attention 权重图
+        edge_att = torch.sigmoid(d_enhanced)
+
+        # 3. 融合 P 和 I 特征
+        p_add = self.conv_p((1 - edge_att) * i + p)
+        i_add = self.conv_i(i + edge_att * p)
+
         return p_add + i_add
-    
+
+
+class Optimized_Light_Bag_DW(nn.Module):
+    """
+    引入深度可分离卷积 (DW-Conv) 优化的 Light_Bag 模块。
+    保持极轻量级的同时，利用 3x3 的空间感受野增强空间感知，修复裂缝断裂问题。
+    """
+
+    def __init__(self, in_channels, out_channels, BatchNorm=nn.BatchNorm2d):
+        super(Optimized_Light_Bag_DW, self).__init__()
+
+        # 封装一个简易的 DW-Conv (Depthwise Separable Convolution)
+        def dw_conv(in_c, out_c):
+            return nn.Sequential(
+                # 1. Depthwise 卷积：负责空间特征提取 (感受野 3x3，利用 groups=in_c 极大地降低参数量)
+                nn.Conv2d(in_c, in_c, kernel_size=3, padding=1, groups=in_c, bias=False),
+                # 2. Pointwise 卷积：负责通道特征跨维度映射和融合 (1x1)
+                nn.Conv2d(in_c, out_c, kernel_size=1, bias=False)
+            )
+
+        # 替换原版的 1x1 卷积为 DW-Conv
+        self.conv_p = nn.Sequential(
+            dw_conv(in_channels, out_channels),
+            BatchNorm(out_channels)
+        )
+        self.conv_i = nn.Sequential(
+            dw_conv(in_channels, out_channels),
+            BatchNorm(out_channels)
+        )
+
+    def forward(self, p, i, d):
+        # 1. 获取 0~1 之间的边界注意力图
+        edge_att = torch.sigmoid(d)
+
+        # 2. 在 DW-Conv 的 3x3 空间感知下进行特征映射
+        p_add = self.conv_p((1 - edge_att) * i + p)
+        i_add = self.conv_i(i + edge_att * p)
+
+        # 3. 最终残差相加
+        return p_add + i_add
 
 class DDFMv2(nn.Module):
     def __init__(self, in_channels, out_channels, BatchNorm=nn.BatchNorm2d):
@@ -367,16 +466,63 @@ class Bag(nn.Module):
         self.conv = nn.Sequential(
                                 BatchNorm(in_channels),
                                 nn.ReLU(inplace=True),
-                                nn.Conv2d(in_channels, out_channels, 
-                                          kernel_size=3, padding=1, bias=False)                  
+                                nn.Conv2d(in_channels, out_channels,
+                                          kernel_size=3, padding=1, bias=False)
                                 )
 
-        
+
     def forward(self, p, i, d):
         edge_att = torch.sigmoid(d)
         return self.conv(edge_att*p + (1-edge_att)*i)
-    
 
+
+
+
+
+class Optimized_Bag_Conv(nn.Module):
+    """
+    基于纯卷积优化的 Bag 模块 (Boundary-Aware Guided Fusion)
+    引入了残差连接增强特征表达，放弃了复杂的 Transformer 组件。
+    公式: Output = F + Conv(F), 其中 F = P * \sigma(D) + I * (1 - \sigma(D))
+    """
+
+    def __init__(self, in_channels, out_channels, BatchNorm=nn.BatchNorm2d):
+        super(Optimized_Bag_Conv, self).__init__()
+
+        # 如果输入和输出通道不一致，需要一个 1x1 卷积对齐维度以进行残差相加
+        if in_channels != out_channels:
+            self.align = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                BatchNorm(out_channels)
+            )
+        else:
+            self.align = nn.Identity()
+
+        # 简单的特征增强卷积块 (连续两个 3x3 卷积提取更深层特征)
+        self.conv_enhance = nn.Sequential(
+            BatchNorm(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            BatchNorm(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, p, i, d):
+        # 1. 计算边界注意力权重 (0 到 1 之间)
+        edge_att = torch.sigmoid(d)
+
+        # 2. 根据公式进行初步边界引导融合
+        # F = P ⊗ \sigma(D) ⊕ I ⊗ (1 - \sigma(D))
+        f = edge_att * p + (1.0 - edge_att) * i
+
+        # 3. 核心优化：残差聚合
+        # Output = Align(F) + Conv_Enhance(F)
+        out = self.align(f) + self.conv_enhance(f)
+
+        return self.relu(out)
 
 if __name__ == '__main__':
 

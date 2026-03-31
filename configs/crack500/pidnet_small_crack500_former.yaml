@@ -15,7 +15,7 @@ DATASET:
   TRAIN_SET: 'list/crack500/train.lst'
   NUM_CLASSES: 2
 MODEL:
-  NAME: pidnet_small
+  NAME: pidnet_small_former
   NUM_OUTPUTS: 2
   PRETRAINED: "pretrained_models/imagenet/PIDNet_S_ImageNet.pth.tar"
 LOSS:

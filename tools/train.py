@@ -131,7 +131,7 @@ def main():
                                   weight=train_dataset.class_weights,
                                   gamma=2.0)  # gamma通常设为2.0
 
-    bd_criterion = BondaryLoss(coeff_bce=40.0)
+    bd_criterion = BondaryLoss(20.0)
     
     model = FullModel(model, sem_criterion, bd_criterion)
     model = nn.DataParallel(model, device_ids=gpus).cuda()
@@ -158,7 +158,7 @@ def main():
     if config.TRAIN.RESUME:
         model_state_file = os.path.join(final_output_dir, 'checkpoint.pth.tar')
         if os.path.isfile(model_state_file):
-            checkpoint = torch.load(model_state_file, map_location={'cuda:0': 'cpu'})
+            checkpoint = torch.load(model_state_file, map_location={'cuda:0': 'cpu'}, weights_only=False)
             best_mIoU = checkpoint['best_mIoU']
             last_epoch = checkpoint['epoch']
             dct = checkpoint['state_dict']
@@ -182,7 +182,7 @@ def main():
                   epoch_iters, config.TRAIN.LR, num_iters,
                   trainloader, optimizer, model, writer_dict)
 
-        if flag_rm == 1 or (epoch % 5 == 0 and epoch < real_end - 100) or (epoch >= real_end - 100):
+        if flag_rm == 1 or ( epoch < real_end - 100) or (epoch >= real_end - 100):
             valid_loss, mean_IoU, IoU_array = validate(config, 
                         testloader, model, writer_dict)
         if flag_rm == 1:

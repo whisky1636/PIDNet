@@ -9,6 +9,11 @@
           </mappings>
           <excludedPaths>
             <excludedPath local="true" path="$PROJECT_DIR$/data/cityscapes" />
+            <excludedPath local="true" path="$PROJECT_DIR$/data/crack500" />
+            <excludedPath local="true" path="$PROJECT_DIR$/pretrained_models/imagenet" />
+            <excludedPath local="true" path="$PROJECT_DIR$/samples" />
+            <excludedPath local="true" path="$PROJECT_DIR$/output" />
+            <excludedPath local="true" path="$PROJECT_DIR$/log" />
           </excludedPaths>
         </serverdata>
       </paths>
