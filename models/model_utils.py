@@ -367,7 +367,7 @@ class Light_Bag(nn.Module):
         super(Light_Bag, self).__init__()
 
         # 引入坐标注意力机制对 D 分支进行增强
-        self.ca = CoordAtt(in_channels, reduction=32, BatchNorm=BatchNorm)
+
 
         self.conv_p = nn.Sequential(
             nn.Conv2d(in_channels, out_channels,
@@ -382,7 +382,7 @@ class Light_Bag(nn.Module):
 
     def forward(self, p, i, d):
         # 1. 使用坐标注意力对边界信息 D 进行增强
-        d_enhanced = self.ca(d)
+        d_enhanced = d
 
         # 2. 获取最终的 Edge Attention 权重图
         edge_att = torch.sigmoid(d_enhanced)
