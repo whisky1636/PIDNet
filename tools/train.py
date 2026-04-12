@@ -77,7 +77,18 @@ def main():
         return 0
     
     imgnet = 'imagenet' in config.MODEL.PRETRAINED
-    model = models.pidnet.get_seg_model(config, imgnet_pretrained=imgnet)
+    imgnet = 'imagenet' in config.MODEL.PRETRAINED
+
+    # 动态加载不同的模型
+    if 'bisenet' in config.MODEL.NAME:
+        import models.others.bisenet_adb_bag as bisenet
+        model = bisenet.get_seg_model(config)
+    elif 'ddrnet' in config.MODEL.NAME:
+        import models.others.ddrnet_23_adb_bag as ddrnet
+        model = ddrnet.get_seg_model(config)
+    else:
+        # 默认加载 PIDNet
+        model = models.pidnet.get_seg_model(config, imgnet_pretrained=imgnet)
  
     batch_size = config.TRAIN.BATCH_SIZE_PER_GPU * len(gpus)
     # prepare data
@@ -127,9 +138,7 @@ def main():
                                         min_kept=config.LOSS.OHEMKEEP,
                                         weight=train_dataset.class_weights)
     else:
-        sem_criterion = FocalLoss(ignore_label=config.TRAIN.IGNORE_LABEL,
-                                  weight=train_dataset.class_weights,
-                                  gamma=2.0)  # gamma通常设为2.0
+        sem_criterion = FocalLoss()  # gamma通常设为2.0
 
     bd_criterion = BondaryLoss(20.0)
     
@@ -182,7 +191,7 @@ def main():
                   epoch_iters, config.TRAIN.LR, num_iters,
                   trainloader, optimizer, model, writer_dict)
 
-        if flag_rm == 1 or ( epoch < real_end - 100) or (epoch >= real_end - 100):
+        if flag_rm == 1 or (epoch % 5 == 0 and epoch < real_end - 100) or (epoch >= real_end - 300):
             valid_loss, mean_IoU, IoU_array = validate(config, 
                         testloader, model, writer_dict)
         if flag_rm == 1:

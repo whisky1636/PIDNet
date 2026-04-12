@@ -167,12 +167,24 @@ def validate(config, testloader, model, writer_dict):
     return ave_loss.average(), mean_IoU, IoU_array
 
 
+import os
+import logging
+import torch
+import torch.nn.functional as F
+import numpy as np
+from tqdm import tqdm
+import heapq  # 新增：用于维护Top10最小堆
+
+
 def testval(config, test_dataset, testloader, model,
             sv_dir='./', sv_pred=False):
     model.eval()
     num_classes = config.DATASET.NUM_CLASSES
     # 在 GPU 上初始化混淆矩阵
     confusion_matrix_gpu = torch.zeros((num_classes, num_classes)).cuda()
+
+    # 新增：用于存储最好mIoU的Top10列表（基于最小堆）
+    top10_images = []
 
     with torch.no_grad():
         for index, batch in enumerate(tqdm(testloader)):
@@ -189,13 +201,35 @@ def testval(config, test_dataset, testloader, model,
                     mode='bilinear', align_corners=config.MODEL.ALIGN_CORNERS
                 )
 
-            # 累加 GPU 混淆矩阵 (核心加速点)
-            confusion_matrix_gpu += get_confusion_matrix_gpu(
+            # 获取当前单张图片/当前Batch的混淆矩阵
+            current_cm_gpu = get_confusion_matrix_gpu(
                 label.cuda(non_blocking=True),
                 pred,
                 num_classes,
                 config.TRAIN.IGNORE_LABEL
             )
+
+            # 累加 GPU 混淆矩阵 (核心加速点)
+            confusion_matrix_gpu += current_cm_gpu
+
+            # --- 新增：计算单张图片的 mIoU 并维护 Top10 ---
+            current_cm_cpu = current_cm_gpu.cpu().numpy()
+            pos_s = current_cm_cpu.sum(1)
+            res_s = current_cm_cpu.sum(0)
+            tp_s = np.diag(current_cm_cpu)
+            # 使用 np.maximum 避免除零报错
+            iou_array_s = (tp_s / np.maximum(1.0, pos_s + res_s - tp_s))
+            current_miou = iou_array_s.mean()
+
+            # dataset 返回的 name 通常是元组或列表，提取实际的文件名
+            img_name = name[0] if isinstance(name, (list, tuple)) else str(name)
+
+            # 维护大小为10的最小堆
+            if len(top10_images) < 10:
+                heapq.heappush(top10_images, (current_miou, img_name))
+            else:
+                heapq.heappushpop(top10_images, (current_miou, img_name))
+            # ----------------------------------------------
 
             if sv_pred:
                 sv_path = os.path.join(sv_dir, 'val_results')
@@ -223,6 +257,16 @@ def testval(config, test_dataset, testloader, model,
     mean_acc = (tp / np.maximum(1.0, pos)).mean()
     IoU_array = (tp / np.maximum(1.0, pos + res - tp))
     mean_IoU = IoU_array.mean()
+
+    # --- 新增：在末尾输出 Top10 图片名字和对应的 mIoU ---
+    # 对堆中的元素按 mIoU 分数进行降序排序 (从高到低)
+    top10_sorted = sorted(top10_images, key=lambda x: x[0], reverse=True)
+    logging.info("=" * 50)
+    logging.info("Top 10 Images with Best mIoU:")
+    for rank, (score, img_n) in enumerate(top10_sorted, 1):
+        logging.info(f"Rank {rank}: {img_n} - mIoU: {score:.4f}")
+    logging.info("=" * 50)
+    # ---------------------------------------------------
 
     return mean_IoU, IoU_array, pixel_acc, mean_acc
 

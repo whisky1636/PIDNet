@@ -1,11 +1,9 @@
-# ------------------------------------------------------------------------------
-# Written by Jiacong Xu (jiacong.xu@tamu.edu)
-# ------------------------------------------------------------------------------
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import time
-from .model_utils import BasicBlock, Bottleneck, segmenthead, DAPPM, PAPPM, PagFM, Bag, Light_Bag
+from .model_utils import BasicBlock, Bottleneck, segmenthead, DAPPM, PAPPM, PAPPM_optimized, PagFM, Bag, Light_Bag, \
+    MDFF_Up, CoordAtt
 import logging
 
 BatchNorm2d = nn.BatchNorm2d
@@ -21,65 +19,65 @@ class PIDNet(nn.Module):
 
         # I Branch
         self.conv1 = nn.Sequential(
-            # 第一层：3x3 卷积，步长为 2，将图像尺寸缩小为 1/2，通道数变为 planes
             nn.Conv2d(3, planes, kernel_size=3, stride=2, padding=1),
             BatchNorm2d(planes, momentum=bn_mom),
             nn.ReLU(inplace=True),
-
-            # 第二层：3x3 卷积，步长为 2，图像尺寸再次缩小一半（总共缩小为 1/4），通道数保持 planes
             nn.Conv2d(planes, planes, kernel_size=3, stride=2, padding=1),
             BatchNorm2d(planes, momentum=bn_mom),
             nn.ReLU(inplace=True),
         )
 
         self.relu = nn.ReLU(inplace=True)
-        # layer1：保持 1/4 分辨率，包含 m 个 BasicBlock，通道数为 planes
         self.layer1 = self._make_layer(BasicBlock, planes, planes, m)
-
-        # layer2：步长为 2，将分辨率缩小为 1/8，通道数加倍至 planes * 2
-        # 此时的输出 x 会被 P 分支和 D 分支作为初始输入
         self.layer2 = self._make_layer(BasicBlock, planes, planes * 2, m, stride=2)
-        # layer3：步长为 2，分辨率缩小为 1/16，通道数变为 planes * 4
-        # 包含 n 个 BasicBlock（通常 n > m）
         self.layer3 = self._make_layer(BasicBlock, planes * 2, planes * 4, n, stride=2)
 
-        # layer4：步长为 2，分辨率缩小为 1/32，通道数变为 planes * 8
+        # ------------------- CoordAtt Layer 3 --------------------
+        self.coord3 = CoordAtt(planes * 4, planes * 4)
+        # 跨层级注入：映射到 P-branch 和 D-branch 对应的通道
+        self.p_att_proj3 = nn.Conv2d(planes * 4, planes * 2, kernel_size=1, bias=False)
+        self.d_att_proj3 = nn.Conv2d(planes * 4, planes if m == 2 else planes * 2, kernel_size=1, bias=False)
+        # ---------------------------------------------------------
+
         self.layer4 = self._make_layer(BasicBlock, planes * 4, planes * 8, n, stride=2)
-        # layer5：步长为 2，分辨率缩小为 1/64，通道数保持 planes * 8
-        # 使用 Bottleneck 结构，expansion=2，内部会先压缩再扩张通道
+
+        # ------------------- CoordAtt Layer 4 --------------------
+        self.coord4 = CoordAtt(planes * 8, planes * 8)
+        self.p_att_proj4 = nn.Conv2d(planes * 8, planes * 2, kernel_size=1, bias=False)
+        self.d_att_proj4 = nn.Conv2d(planes * 8, planes * 2, kernel_size=1, bias=False)
+        # ---------------------------------------------------------
+
         self.layer5 = self._make_layer(Bottleneck, planes * 8, planes * 8, 2, stride=2)
 
+        # ---------------------------------------------------------
+        # 新增: I Branch 的 MDFF-Up 自顶向下融合模块
+        # 注: SPP 模块将先作用于最深层特征输出 planes * 4，然后再自顶向下融合
+        # ---------------------------------------------------------
+        self.mdff_5_4 = MDFF_Up(planes * 8, planes * 4, planes * 8)  # i_x4(planes*8) & spp_out(planes*4)
+        self.mdff_4_3 = MDFF_Up(planes * 4, planes * 8, planes * 4)  # i_x3(planes*4) & fused_4(planes*8)
+        self.mdff_3_2 = MDFF_Up(planes * 2, planes * 4, planes * 4)  # i_x2(planes*2) & fused_3(planes*4)，最终输出 planes*4
+
         # P Branch
-        # compression3：将 I 分支 layer3 的输出（planes * 4）压缩到 planes * 2
         self.compression3 = nn.Sequential(
             nn.Conv2d(planes * 4, planes * 2, kernel_size=1, bias=False),
             BatchNorm2d(planes * 2, momentum=bn_mom),
         )
-        # compression4：将 I 分支 layer4 的输出（planes * 8）压缩到 planes * 2
+
         self.compression4 = nn.Sequential(
             nn.Conv2d(planes * 8, planes * 2, kernel_size=1, bias=False),
             BatchNorm2d(planes * 2, momentum=bn_mom),
         )
-        # pag3 & pag4：使用 PagFM 模块进行融合
-        # 它让 P 分支（细节特征）根据注意机制，有选择地学习 I 分支（语义特征）的信息
         self.pag3 = PagFM(planes * 2, planes)
         self.pag4 = PagFM(planes * 2, planes)
 
-        # layer3_：处理第一次融合后的特征，包含 m 个 BasicBlock，分辨率保持 1/8
         self.layer3_ = self._make_layer(BasicBlock, planes * 2, planes * 2, m)
-        # layer4_：处理第二次融合后的特征，包含 m 个 BasicBlock，分辨率保持 1/8
         self.layer4_ = self._make_layer(BasicBlock, planes * 2, planes * 2, m)
-        # layer5_：最后的特征细化层，使用 1 个 Bottleneck 块
         self.layer5_ = self._make_layer(Bottleneck, planes * 2, planes * 2, 1)
 
         # D Branch
         if m == 2:
-            # layer3_d & layer4_d：D 分支的初始特征处理层，保持 1/8 分辨率
             self.layer3_d = self._make_single_layer(BasicBlock, planes * 2, planes)
             self.layer4_d = self._make_layer(Bottleneck, planes, planes, 1)
-
-            # diff3 & diff4：特征差分模块（核心）
-            # 它们从 I 分支的深层特征（planes * 4 / 8）中提取空间变化信息，模拟“求导”过程来定位边界
             self.diff3 = nn.Sequential(
                 nn.Conv2d(planes * 4, planes, kernel_size=3, padding=1, bias=False),
                 BatchNorm2d(planes, momentum=bn_mom),
@@ -88,13 +86,9 @@ class PIDNet(nn.Module):
                 nn.Conv2d(planes * 8, planes * 2, kernel_size=3, padding=1, bias=False),
                 BatchNorm2d(planes * 2, momentum=bn_mom),
             )
-
-            # spp：使用 PAPPM（轻量级金字塔池化），增强 D 分支对全局特征的理解
-            self.spp = PAPPM(planes * 16, ppm_planes, planes * 4)
-            # dfm：使用 Light_Bag（轻量级边界注意引导融合），准备最后的三路合一
+            self.spp = PAPPM_optimized(planes * 16, ppm_planes, planes * 4)
             self.dfm = Light_Bag(planes * 4, planes * 4)
         else:
-            # 相比轻量版，此处使用了更多的 planes * 2 通道，且使用了更强大的 DAPPM 和标准 Bag 模块
             self.layer3_d = self._make_single_layer(BasicBlock, planes * 2, planes * 2)
             self.layer4_d = self._make_single_layer(BasicBlock, planes * 2, planes * 2)
             self.diff3 = nn.Sequential(
@@ -108,7 +102,6 @@ class PIDNet(nn.Module):
             self.spp = DAPPM(planes * 16, ppm_planes, planes * 4)
             self.dfm = Bag(planes * 4, planes * 4)
 
-        # layer5_d：D 分支最后的特征提取层，使用 Bottleneck 结构进一步精炼边界特征
         self.layer5_d = self._make_layer(Bottleneck, planes * 2, planes * 2, 1)
 
         # Prediction Head
@@ -165,39 +158,85 @@ class PIDNet(nn.Module):
 
         x = self.conv1(x)
         x = self.layer1(x)
-        x = self.relu(self.layer2(self.relu(x)))
-        x_ = self.layer3_(x)
-        x_d = self.layer3_d(x)
 
-        x = self.relu(self.layer3(x))
-        x_ = self.pag3(x_, self.compression3(x))
+        # ---------------------------------------------------------
+        # 1. 计算 I Branch 并提取深层特征
+        # ---------------------------------------------------------
+        i_x2 = self.relu(self.layer2(self.relu(x)))
+
+        # P / D 初始化使用 I 分支的原始第二层特征
+        x_ = self.layer3_(i_x2)
+        x_d = self.layer3_d(i_x2)
+
+        # ======= Stage 3 =======
+        i_x3 = self.relu(self.layer3(i_x2))
+
+        # 应用 CoordAtt 并获取注意力权重
+        i_x3, att3 = self.coord3(i_x3)
+
+        # 动态注入 P-branch 和 D-branch (插值对齐 1/8 空间分辨率)
+        size_p_d = x_.shape[2:]
+        att3_p = F.interpolate(self.p_att_proj3(att3), size=size_p_d, mode='bilinear', align_corners=algc)
+        att3_d = F.interpolate(self.d_att_proj3(att3), size=size_p_d, mode='bilinear', align_corners=algc)
+
+        x_ = x_ * torch.sigmoid(att3_p)
+        x_d = x_d * torch.sigmoid(att3_d)
+
+        # P / D 融合连接使用 I 分支增强后的第三层特征 (i_x3)
+        x_ = self.pag3(x_, self.compression3(i_x3))
         x_d = x_d + F.interpolate(
-            self.diff3(x),
-            size=[height_output, width_output],
+            self.diff3(i_x3),
+            size=size_p_d,
             mode='bilinear', align_corners=algc)
         if self.augment:
             temp_p = x_
 
-        x = self.relu(self.layer4(x))
+        # ======= Stage 4 =======
+        i_x4 = self.relu(self.layer4(i_x3))
         x_ = self.layer4_(self.relu(x_))
         x_d = self.layer4_d(self.relu(x_d))
 
-        x_ = self.pag4(x_, self.compression4(x))
+        # 应用 CoordAtt 并获取注意力权重
+        i_x4, att4 = self.coord4(i_x4)
+
+        # 动态注入 P-branch 和 D-branch (插值对齐 1/8 空间分辨率)
+        size_p_d_4 = x_.shape[2:]
+        att4_p = F.interpolate(self.p_att_proj4(att4), size=size_p_d_4, mode='bilinear', align_corners=algc)
+        att4_d = F.interpolate(self.d_att_proj4(att4), size=size_p_d_4, mode='bilinear', align_corners=algc)
+
+        x_ = x_ * torch.sigmoid(att4_p)
+        x_d = x_d * torch.sigmoid(att4_d)
+
+        # P / D 融合连接使用 I 分支增强后的第四层特征 (i_x4)
+        x_ = self.pag4(x_, self.compression4(i_x4))
         x_d = x_d + F.interpolate(
-            self.diff4(x),
-            size=[height_output, width_output],
+            self.diff4(i_x4),
+            size=size_p_d_4,
             mode='bilinear', align_corners=algc)
         if self.augment:
             temp_d = x_d
 
+        # ======= Stage 5 =======
+        i_x5 = self.layer5(i_x4)
         x_ = self.layer5_(self.relu(x_))
         x_d = self.layer5_d(self.relu(x_d))
-        x = F.interpolate(
-            self.spp(self.layer5(x)),
-            size=[height_output, width_output],
-            mode='bilinear', align_corners=algc)
 
-        x_ = self.final_layer(self.dfm(x_, x, x_d))
+        # 最深层经过 SPP 提取上下文 (提取出的特征维度为 planes * 4)
+        i_x5_spp = self.spp(i_x5)
+
+        # ---------------------------------------------------------
+        # 2. I 分支使用 MDFF-Up 自顶向下融合特征作为最终表征
+        #    (此时使用的是经 CoordAtt 强化过空间坐标感知的 i_x3 和 i_x4)
+        # ---------------------------------------------------------
+        fused_i4 = self.mdff_5_4(i_x4, i_x5_spp)  # 融合到 1/32
+        fused_i3 = self.mdff_4_3(i_x3, fused_i4)  # 融合到 1/16
+        fused_i2 = self.mdff_3_2(i_x2, fused_i3)  # 融合到 1/8
+
+        # 最终输入到 DFM 的 I分支 特征即为 MDFF_Up 融合后的结果
+        x_i = fused_i2
+
+        # DFM 接收经过 P分支 (x_)、增强 I分支 (x_i) 和 D分支 (x_d) 的特征融合
+        x_ = self.final_layer(self.dfm(x_, x_i, x_d))
 
         if self.augment:
             x_extra_p = self.seghead_p(temp_p)
@@ -224,8 +263,6 @@ def get_seg_model(cfg, imgnet_pretrained):
         model_dict = model.state_dict()  # 获取当前初始化的模型参数结构
 
         # 【核心对齐逻辑】：过滤预训练权重
-        # 只有当预训练权重的 Key 在当前模型中存在，且 Tensor 的形状(shape)完全一致时才保留
-        # 这可以防止因类别数不同（如 ImageNet 是 1000 类，而分割任务是 19 类）导致输出层报错
         pretrained_state = {k: v for k, v in pretrained_state.items() if
                             (k in model_dict and v.shape == model_dict[k].shape)}
 
@@ -240,8 +277,6 @@ def get_seg_model(cfg, imgnet_pretrained):
         model_dict = model.state_dict()
 
         # 【切片处理】：k[6:] 逻辑
-        # 有时权重是在 DataParallel 模式下保存的，Key 会带有 'module.' 前缀
-        # k[6:] 的作用是跳过前 6 个字符（通常是去掉 'model.' 或 'module.' 前缀）来尝试匹配
         pretrained_dict = {k[6:]: v for k, v in pretrained_dict.items() if
                            (k[6:] in model_dict and v.shape == model_dict[k[6:]].shape)}
 
@@ -266,8 +301,6 @@ def get_pred_model(name, num_classes):
 
 if __name__ == '__main__':
 
-    # Comment batchnorms here and in model_utils before testing speed since the batchnorm could be integrated into conv operation
-    # (do not comment all, just the batchnorm following its corresponding conv layer)
     device = torch.device('cuda')
     model = get_pred_model(name='pidnet_s', num_classes=19)
     model.eval()
@@ -308,8 +341,3 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
     FPS = 1000 / latency
     print(FPS)
-
-
-
-
-

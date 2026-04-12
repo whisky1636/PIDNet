@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="pidnet" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Remote Python 3.10.12 (sftp://root@117.50.197.249:23/usr/bin/python3)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="pidnet" project-jdk-type="Python SDK" />
 </project>

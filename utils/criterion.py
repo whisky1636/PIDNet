@@ -101,46 +101,43 @@ class OhemCrossEntropy(nn.Module):
             raise ValueError("lengths of prediction and target are not identical!")
 
 
+# --- 1. 新增：Focal Loss ---
 class FocalLoss(nn.Module):
-    def __init__(self, ignore_label=-1, weight=None, gamma=2.0):
+    def __init__(self, alpha=0.75, gamma=2.0, reduction='mean'):
         super(FocalLoss, self).__init__()
-        self.ignore_label = ignore_label
+        self.alpha = alpha
         self.gamma = gamma
-        # 注意这里 reduction='none'，为了计算每个像素的 Focal Loss
-        self.criterion = nn.CrossEntropyLoss(
-            weight=weight,
-            ignore_index=ignore_label,
-            reduction='none'
-        )
+        self.reduction = reduction
 
-    def _forward(self, score, target):
-        # score: [N, C, H, W]
-        # target: [N, H, W]
-        logpt = -self.criterion(score, target)  # CE loss 的本质是 -log(pt)
-        pt = torch.exp(logpt)
-
-        # 计算 focal loss: -(1-pt)^gamma * log(pt)
-        focal_loss = -((1 - pt) ** self.gamma) * logpt
-
-        # 返回均值
-        return focal_loss.mean()
-
-    def forward(self, score, target):
-        # 无论 NUM_OUTPUTS 是多少，只要传进来的不是列表或元组，就把它包成列表
-        if not (isinstance(score, list) or isinstance(score, tuple)):
-            score = [score]
-
-        balance_weights = config.LOSS.BALANCE_WEIGHTS
-        sb_weights = config.LOSS.SB_WEIGHTS
-        if len(balance_weights) == len(score):
-            return sum([w * self._forward(x, target) for (w, x) in zip(balance_weights, score)])
-        elif len(score) == 1:
-            return sb_weights * self._forward(score[0], target)
+    def forward(self, inputs, targets):
+        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-bce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * bce_loss
+        if self.reduction == 'mean':
+            return focal_loss.mean()
         else:
-            raise ValueError("lengths of prediction and target are not identical!")
+            return focal_loss.sum()
+
+
+# --- 2. 新增：Dice Loss ---
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1.0):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, inputs, targets):
+        inputs = torch.sigmoid(inputs)
+        inputs = inputs.contiguous().view(-1)
+        targets = targets.contiguous().view(-1)
+        intersection = (inputs * targets).sum()
+        dice = (2. * intersection + self.smooth) / (inputs.sum() + targets.sum() + self.smooth)
+        return 1 - dice
+
+
+
 def weighted_bce(bd_pre, target):
     n, c, h, w = bd_pre.size()
-    log_p = bd_pre.permute(0,2,3,1).contiguous().view(1, -1)
+    log_p = bd_pre.permute(0, 2, 3, 1).contiguous().view(1, -1)
     target_t = target.view(1, -1)
 
     pos_index = (target_t == 1)
@@ -158,18 +155,61 @@ def weighted_bce(bd_pre, target):
     return loss
 
 
+
+
+
+# class BondaryLoss(nn.Module):
+#     def __init__(self, coeff_bce=30.0, gamma=2.0):
+#         super(BondaryLoss, self).__init__()
+#         # 建议把 coeff_bce 调到 30.0 或 40.0，弥补 Focal loss 数值被压缩的特性
+#         self.coeff_bce = coeff_bce
+#         self.gamma = gamma
+#
+#     def forward(self, bd_pre, bd_gt):
+#         n, c, h, w = bd_pre.size()
+#
+#         # 展平预测和标签
+#         log_p = bd_pre.permute(0, 2, 3, 1).contiguous().view(1, -1)
+#         target_t = bd_gt.view(1, -1)
+#
+#         # 1. 完美保留 PIDNet 原始的“动态类别平衡”逻辑
+#         pos_index = (target_t == 1)
+#         neg_index = (target_t == 0)
+#
+#         # 加 clamp 避免图像中没有任何正样本时引发除以 0 报错
+#         pos_num = pos_index.sum().clamp(min=1)
+#         neg_num = neg_index.sum().clamp(min=1)
+#         sum_num = pos_num + neg_num
+#
+#         # 构建动态 Alpha 权重矩阵
+#         alpha_weight = torch.zeros_like(log_p)
+#         alpha_weight[pos_index] = neg_num * 1.0 / sum_num  # 给予极少数正样本近乎 1.0 的超高权重
+#         alpha_weight[neg_index] = pos_num * 1.0 / sum_num  # 压制海量负样本的基础权重
+#
+#         # 2. 计算基础的 BCE Loss (不求均值)
+#         bce_loss = F.binary_cross_entropy_with_logits(log_p, target_t, reduction='none')
+#
+#         # 3. 融合 Focal Loss 核心机制：(1 - pt)^gamma
+#         pt = torch.exp(-bce_loss)
+#         focal_loss = alpha_weight * ((1 - pt) ** self.gamma) * bce_loss
+#
+#         # 4. 求均值并放大
+#         loss = self.coeff_bce * focal_loss.mean()
+#
+#         return loss
+
+
 class BondaryLoss(nn.Module):
-    def __init__(self, coeff_bce = 20.0):
+    def __init__(self, coeff_bce=20.0):
         super(BondaryLoss, self).__init__()
         self.coeff_bce = coeff_bce
-        
-    def forward(self, bd_pre, bd_gt):
 
+    def forward(self, bd_pre, bd_gt):
         bce_loss = self.coeff_bce * weighted_bce(bd_pre, bd_gt)
         loss = bce_loss
-        
+
         return loss
-    
+
 if __name__ == '__main__':
     a = torch.zeros(2,64,64)
     a[:,5,:] = 1

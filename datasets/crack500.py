@@ -76,6 +76,27 @@ class Crack500(BaseDataset):
                 label[temp == k] = v
         return label
 
+    # def __getitem__(self, index):
+    #     item = self.files[index]
+    #     name = item["name"]
+    #     image = cv2.imread(os.path.join(self.root,  item["img"]),
+    #                        cv2.IMREAD_COLOR)
+    #     size = image.shape
+    #
+    #     if 'test' in self.list_path:
+    #         image = self.input_transform(image)
+    #         image = image.transpose((2, 0, 1))
+    #
+    #         return image.copy(), np.array(size), name
+    #
+    #     label = cv2.imread(os.path.join(self.root,  item["label"]),
+    #                        cv2.IMREAD_GRAYSCALE)
+    #     label = self.convert_label(label)
+    #
+    #     image, label, edge = self.gen_sample(image, label,
+    #                                          self.multi_scale, self.flip, edge_size=self.bd_dilate_size)
+    #
+    #     return image.copy(), label.copy(), edge.copy(), np.array(size), name
     def __getitem__(self, index):
         item = self.files[index]
         name = item["name"]
@@ -125,7 +146,6 @@ class Crack500(BaseDataset):
                                              self.multi_scale, self.flip, edge_size=self.bd_dilate_size)
 
         return image.copy(), label.copy(), edge.copy(), np.array(size), name
-
     def single_scale_inference(self, config, model, image):
         pred = self.inference(config, model, image)
         return pred
