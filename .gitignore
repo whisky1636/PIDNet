@@ -6,3 +6,7 @@
 /data/crack500/
 /log
 /output
+**/__pycache__/
+__pycache__/
+models/best.pt
+
